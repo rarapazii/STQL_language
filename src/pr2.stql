@@ -1,0 +1,8 @@
+main =
+  let foo = readTtlFile "foo.ttl" in
+  let predicate = proc triple -> 
+    case triple of
+      | (sub, pred, obj) -> 
+        eq .$ sub .$ ("www" : "cw" : "org" : [], [], "#problem2" : []) && eq .$ obj .$ true
+    end
+  in printRDF .$ (filter .$ predicate .$ foo)

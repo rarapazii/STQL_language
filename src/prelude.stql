@@ -1,0 +1,82 @@
+eq = proc x -> proc x1 -> not (x1 < x) && not (x < x1)
+
+elem = proc x -> proc xs ->
+  case xs of
+    | []        -> false
+    | x1 : xs1  -> eq .$ x .$ x1 || elem .$ x .$ xs1
+  end
+
+filter = proc f -> proc xs ->
+  case xs of
+    | []         -> []
+    | x1 : xs1   -> if f .$ x1 then x1 : filter .$ f .$ xs1 else filter .$ f .$ xs1
+  end
+
+map = proc f -> proc xs ->
+  case xs of
+    | []       -> []
+    | x : xs1  -> f .$ x : map .$ f .$ xs1
+  end
+
+append = proc xs -> proc ys -> 
+  case xs of
+    | []        -> ys
+    | x : xs1   -> x : append .$ xs1 .$ ys
+  end
+
+sortList = proc f -> proc xs ->
+  let insert = proc x -> proc xs ->
+        case xs of
+          | []         -> x : []
+          | x1 : xs1   -> if f .$ x .$ x1
+               then x : xs
+               else x1 : (insert .$ x .$ xs1)
+        end
+  in case xs of
+      | []      -> []
+      | x : xs1 -> insert .$ x .$ (sortList .$ f .$ xs1)
+      end
+
+nub = proc xs ->
+  case xs of
+    | []      -> []
+    | x : xs1 -> let xs2 = nub .$ xs1 in if elem .$ x .$ xs2 then xs2 else x : xs2
+  end
+
+defaultCompare = proc x -> proc y -> x < y
+
+sort = sortList .$ defaultCompare
+
+traverse = proc f -> proc xs ->
+  case xs of
+    | []       -> 42
+    | x1 : xs1 -> let temp = f .$ x1 in traverse .$ f .$ xs1
+  end
+
+printURI = proc uri -> case uri of
+  | (doms, domsSub, tag) ->
+     let x = print "<http://" in
+     let x = case doms of
+        | dom : doms1 -> let x = print dom in traverse .$ (proc dom -> let x = print "." in print dom) .$ doms1
+        end in
+     let x = traverse .$ (proc dom -> let x = print "/" in print dom) .$ domsSub in
+     let x = case tag of
+        | []       -> 42
+        | tag : [] -> let x = print "/" in print tag
+        end in
+     print ">"
+  end
+
+printTriple = proc triple ->
+  case triple of
+    | (uri1, uri2, obj) -> 
+        let x = printURI .$ uri1 in
+        let y = printURI .$ uri2 in 
+        let z = case obj of
+           | (x1, y1, z1)   -> printURI .$ obj
+           | lit            -> print lit
+           end  in
+        42
+  end 
+
+printRDF = proc rdf -> traverse .$ (proc triple -> let temp = printTriple .$ triple in let temp = space in print ".\n") .$ (nub .$ (sort .$ rdf))

@@ -1,0 +1,4 @@
+main = 
+    let foo = readTtlFile "foo.ttl" in
+    let bar = readTtlFile "bar.ttl" in
+    printRDF .$ (append .$ foo .$ bar)
