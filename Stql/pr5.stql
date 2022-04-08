@@ -1,0 +1,11 @@
+pred = ("www" : "cw" : "org" : [] , "problem5" : [], "#inRange" : [])
+
+go = proc triples -> 
+  case triples of
+    | []                              -> []
+    | (sub, pre, n) : triples1        -> if n < 0 || 99 < n
+        then (sub, pred, false) : go .$ triples1
+        else (sub, pre, n + 1) : (sub, pred, true) : go .$ triples1
+  end
+
+main = let foo = readTtlFile "fooProb5.ttl" in printRDF .$ (go .$ foo)

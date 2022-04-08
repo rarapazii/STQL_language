@@ -1,0 +1,16 @@
+getSubjs = map .$ proc triple -> 
+  case triple of
+    | (subj, pred, obj) -> subj
+  end
+
+predicate = proc triple -> proc triples ->
+  case triple of
+    | (subj, pred, obj)   -> elem .$ obj .$ (getSubjs .$ triples)
+  end
+
+main = 
+  let foo = readTtlFile "foo.ttl" in
+  let bar = readTtlFile "bar.ttl" in
+  let foo1 = filter .$ (proc triple -> predicate .$ triple .$ bar) .$ foo in
+  let bar1 = filter .$ (proc triple -> predicate .$ triple .$ foo) .$ bar in
+    printRDF .$ (append .$ foo1 .$ bar1)
