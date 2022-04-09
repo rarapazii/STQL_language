@@ -1,0 +1,454 @@
+# 1.stql 的语法
+
+## 1.1一个程序Prog是一些定义Def
+Prog ::= Def
+         | Def Prog
+
+## 1.2一个定义Def是变量名与其关联的表达式
+Def ::= Var = Expr
+
+变量名，布尔值，字符器等等的语法就不需要多讲了吧
+Var = ....
+Bool = ..
+...
+
+
+##1.3 表达式
+Expr ::= if Expr then Expr else Expr
+        | let Var = Expr in Expr
+        | case Expr of CaseClauses end
+        | proc Var -> Expr
+        | Expr + Expr
+        | Expr - Expr
+        | Expr * Expr
+        | Expr / Expr
+        | Expr : Expr
+        | Expr < Expr
+        | Expr && Expr
+        | Expr || Expr
+        | not Expr
+        | []
+        | '(' Expr ',' Expr ',' Expr ')'
+        | readTtlFile Expr
+        | Expr .$ Expr
+        | Int
+        | Bool
+        | String
+        | Var
+        | '(' Expr ')'
+        | print Expr
+        | read Expr
+        | show Expr
+        | nl
+        | space
+
+## 1.4优先级
+||, &&, <, :, + -, * /, .$ 依次递增
+
+||, &&, :是右结合的
+< 没有结合律
++ - * / .$都是左结合的
+
+##1.5 case的一些子句
+CaseClauses = CaseClause
+                    | CaseClause CaseClauses
+
+CaseClause = '|' Pattern -> Expr
+
+## 1.6模式的定义
+--忘记把常量也作为模式的一种了，导致我们的模式匹配不支持直接匹配常量，比如1，"ok"这些
+--但是，我懒得修改了，毕竟，先用变量x匹配，然后用if来检查x是不是1,也能达到一样的效果。
+Pattern = Var
+             | Pattern : Pattern
+             | '(' Pattern ',' Pattern ',' Pattern ')'
+             | []
+***
+# 2.stql的解释
+静态域+call by value
+
+## 2.1--先定义Value来表示表达式的求值结果
+`data Value = VString String` 
+           `| VInt Int`
+           `| VBool Bool`
+           `| VList [Value]`
+           `| VTriple Value Value Value`
+           `| VUnit`
+           `| VErr`
+           `| VClosure Closure`
+
+> -- 形参名 + 函数体 + 闭包创建时的环境
+`data Closure = Closure String Expr Env`
+
+> -- 环境是一个Map,将变量名与变量名所绑定的值的引用关联起来
+`type Env = M.Map String (IORef Value)`
+
+> -- 以IO为底层单子，经过StateT Env这个单子变换后获得
+`type App = StateT Env IO` 
+
+> -- 执行一个程序，就是依次执行每个def
+`exec :: Prog -> App ()`
+`exec prog = forM_ prog execDef`
+
+-- x = e1
+-- 创建一个引用r，指向x的值
+-- 将x与r的对应关系记录在环境中
+-- 在这个新环境下，求值e1,记为v1
+-- 让r指向v1
+execDef :: Def -> App ()
+execDef (name, expr) = do
+    valueRef <- liftIO $ newIORef VUnit
+    modify $ M.insert name valueRef
+    value <- evalExpr expr
+    liftIO $ writeIORef valueRef value
+
+-- 表示式求值
+-- 只介绍一些较为特殊的情况
+evalExpr :: Expr -> App Value
+
+1.在env下计算 e1 .$ e2
+a)在env下分别计算e1, e2
+b)e1的结果v1应该为一个闭包 Closure arg body env'
+c)创建一个引用v2_ref,指向e2的求值结果v2
+d)对闭包在创建时的环境env'进行扩展，引入arg与v2_ref的对应关系
+e)在扩展后的环境下计算函数体,记结果为v3
+f)恢复环境为env,然后返回v3
+
+    App e1 e2     -> do
+        v1 <- evalExpr e1
+        case v1 of
+            VClosure (Closure arg body env) -> evalExpr e2 >>= \v2 -> liftIO (newIORef v2) >>= \v2_ref ->
+                local (\_ -> M.insert arg v2_ref env) $ evalExpr body
+            _                     -> pure VErr
+
+2. let x = e1 in e2
+a)创建一个引用ref_x
+b)将x与ref_x在环境env中绑定起来,记新环境为env'
+c)在新环境env'下计算e1，记结果为v1
+d)让ref_x指向v1
+e)在新环境env'下计算e2，记结果为v2
+f)恢复环境为env,返回v2
+
+    Let name e1 e2   -> do
+        valueRef <- liftIO $ newIORef VUnit
+        local (M.insert name valueRef) $ do
+            v1 <- evalExpr e1
+            liftIO $ writeIORef valueRef v1
+            evalExpr e2
+
+3.
+case e1 of
+  | pattern1 -> body1
+  | pattern2 -> body2
+   ...
+end
+
+    CaseOf e1 cases   -> do
+        v1 <- evalExpr e1
+        case [(bindings, caseBody) | (pattern, caseBody) <- cases, bindings <- patternMatch v1 pattern] of
+            (bindings, caseBody) : _        -> do
+                bindings' <- forM bindings $ \(name, value) -> (,) name <$> (liftIO $ newIORef value)
+                local (M.union (M.fromList bindings')) $ evalExpr caseBody
+            _                               -> pure VErr
+1.计算e1,记结果为v1
+2.从上到下的寻找一个模式能匹配v1的
+3.如果找到，那么将通过模式匹配绑定的每个变量都创建一个引用，然后让这个引用指向变量的值
+4.扩展环境
+5.计算相应的body
+6.恢复环境 
+7.返回body的求值结果
+
+4. readTtlFile e1
+
+    ReadTtlFile e1  -> do
+        v1 <- evalExpr e1
+        case v1 of
+            VString fname -> liftIO (readSimpleRDF fname) >>= \rdf -> case rdf of
+                Nothing   -> pure VErr
+                Just rdf' -> pure $ value_of_simpleRDF rdf'
+            _             -> pure VErr
+
+1.计算e1的值
+2.读取相应的文件，然后按rdf的格式解析出一个rdf
+3.将rdf转化成Value
+
+
+至于Pattern Match与SimpleRDF如何转化成Value自己去看代码
+
+--------------------------------------------------------------------------------------------
+3.ttl文件的解析去看Decode.hs
+这里只大概上介绍思路
+
+1.定义数据类型表示ttl文件
+-------------------------------------------------------
+一个ttl文件里面有一些Item
+
+xxx.ttl 内有
+item1
+item2
+...
+itemn
+
+----------------------------------------------------------
+一个Item，要么是一个声明将一个前缀与一个uri绑定起来，要么是一个三元组。
+
+一个声明将一个前缀与一个uri绑定起来
+@prefix 前缀名: <uri> .
+@base <uri> .
+
+一个三元组
+<sub> <pre> <obj>, <obj>, <obj>, ...,  <obj>;
+           <pre> <obj>, <obj>, <obj>, ...,  <obj>;
+           ....
+           <pre><obj>, <obj>, <obj>, ...,  <obj>. 
+
+
+因此，定义的数据类型为
+type RDF = [Item]
+
+data Item = Prefix Name URI
+          | Triple URI [(URI, [Object])]
+    deriving Show
+
+一个URI,有2类可能
+1是一个完整的
+2是一个使用前缀的
+data URI = URI [Domain] [Domain] (Maybe Tag)
+         | UsePrefix Name [Domain] (Maybe Tag)
+    deriving Show
+
+一个对象有4种可能
+data Object = URIObj URI
+                    | StrObj String
+                    | IntObj Integer
+                    | BoolObj Bool
+
+---------------------------------------------------------------------------------------
+定义RDF的解析函数，自己看文件去
+readRDF :: String -> IO (Maybe RDF)
+
+
+-------------------------------------------------------------------------------------------
+通过上面的那些工作，ttl文件的反序列化是完成了。
+但是其还有大量的uri是使用前缀的来表示的，以及一些三元组是通过list的方式缩写的
+我们应该将前缀替换成对应的uri，并将语法糖展开
+
+定义一个新的数据类型，表示消去前缀后的ttl文件内容
+type SimpleRDF = [Triple]
+data Triple = Tri SimpleURI SimpleURI (Either SimpleURI Literal) deriving (Eq, Ord)
+data Literal = StrLit String | IntLit Integer | BoolLit Bool deriving (Eq, Ord)
+
+-- 消去前缀后的uri
+data SimpleURI = SimpleURI [Domain] [Domain] (Maybe Tag) deriving (Eq, Ord)
+
+-- 消去语法糖与前缀的过程
+-- 需要依赖一个全局可变的环境Env， 来记录前缀与它关联的uri
+-- 同时要记录已经转化好的那些三元组
+-- 所以我们的函数工作在下面这个单子上
+StateT Env (Writer SimpleRDF)
+
+evalRDF
+对于rdf中的每个item
+1.如果它是个声明，那么将其声明的前缀与对应的uri扩展后的uri'的对应关系加入到env中
+2.如果它是个三元组，那么对于每个分量都求值，然后将求值结果记录到日志中
+
+evalURI evalObj 略
+自己看定义去
+
+我是看在做了好多次的条件下，才对于每个子任务都统一收个300的。
+你自己看文件的时候应该可以明显确认这每个子任务都要用到好多个小时。
+
+----------------------------------------------- stql文件的定义
+prelude定义了一些辅助函数
+
+判断2个值是否相等
+eq = proc x -> proc x1 -> not (x1 < x) && not (x < x1)
+
+判断一个元素是否在列表中出现
+elem = proc x -> proc xs ->
+  case xs of
+    | []        -> false
+    | x1 : xs1  -> eq .$ x .$ x1 || elem .$ x .$ xs1
+  end
+
+按给定的谓词对列表过滤，留下符合条件的元素
+filter = proc f -> proc xs ->
+  case xs of
+    | []         -> []
+    | x1 : xs1   -> if f .$ x1 then x1 : filter .$ f .$ xs1 else filter .$ f .$ xs1
+  end
+
+对列表中的元素作统一操作
+map = proc f -> proc xs ->
+  case xs of
+    | []       -> []
+    | x : xs1  -> f .$ x : map .$ f .$ xs1
+  end
+
+合并2个列表
+append = proc xs -> proc ys -> 
+  case xs of
+    | []        -> ys
+    | x : xs1   -> x : append .$ xs1 .$ ys
+  end
+
+对列表排序，需要提供一个函数来比较元素的大小
+sortList = proc f -> proc xs ->
+  let insert = proc x -> proc xs ->
+        case xs of
+          | []         -> x : []
+          | x1 : xs1   -> if f .$ x .$ x1
+               then x : xs
+               else x1 : (insert .$ x .$ xs1)
+        end
+  in case xs of
+      | []      -> []
+      | x : xs1 -> insert .$ x .$ (sortList .$ f .$ xs1)
+      end
+
+对列表去重
+nub = proc xs ->
+  case xs of
+    | []      -> []
+    | x : xs1 -> let xs2 = nub .$ xs1 in if elem .$ x .$ xs2 then xs2 else x : xs2
+  end
+
+从小到大排序
+defaultCompare = proc x -> proc y -> x < y
+
+升序排序
+sort = sortList .$ defaultCompare
+
+对列表xs中的每个元素x都执行过程f
+
+traverse = proc f -> proc xs ->
+  case xs of
+    | []       -> 42
+    | x1 : xs1 -> let temp = f .$ x1 in traverse .$ f .$ xs1
+  end
+
+打印一个uri
+printURI = proc uri -> case uri of
+  | (doms, domsSub, tag) ->
+     let x = print "<http://" in
+     let x = case doms of
+        | dom : doms1 -> let x = print dom in traverse .$ (proc dom -> let x = print "." in print dom) .$ doms1
+        end in
+     let x = traverse .$ (proc dom -> let x = print "/" in print dom) .$ domsSub in
+     let x = case tag of
+        | []       -> 42
+        | tag : [] -> let x = print "/" in print tag
+        end in
+     print ">"
+  end
+
+打印一个三元组 
+printTriple = proc triple ->
+  case triple of
+    | (uri1, uri2, obj) -> 
+        let x = printURI .$ uri1 in
+        let y = printURI .$ uri2 in 
+        let z = case obj of
+           | (x1, y1, z1)   -> printURI .$ obj
+           | lit            -> print lit
+           end  in
+        42
+  end 
+
+先排序再去重
+再打印一些三元组
+printRDF = proc rdf -> traverse .$ (proc triple -> let temp = printTriple .$ triple in let temp = space in print ".\n") .$ (nub .$ (sort .$ rdf))
+
+---------------------------------------------------- pr1
+main = 
+    let foo = readTtlFile "foo.ttl" in
+    let bar = readTtlFile "bar.ttl" in
+    printRDF .$ (append .$ foo .$ bar)
+
+打开2个文件，然后合并内容，再打印
+
+------------------------------------------------------- pr2
+main =
+  let foo = readTtlFile "foo.ttl" in
+  let predicate = proc triple -> 
+    case triple of
+      | (sub, pred, obj) -> 
+        eq .$ sub .$ ("www" : "cw" : "org" : [], [], "#problem2" : []) && eq .$ obj .$ true
+    end
+  in printRDF .$ (filter .$ predicate .$ foo)
+
+打开文件，然后按条件过滤，再打印过滤结果
+---------------------------------------------------------------------------------------------------------------
+note:
+我的uri是表示为一个三元组
+所以 "http://www.cw.ord/#problem2"
+在stql解释器的内部表示为 ("www" : "cw" : "org" : [], [], "#problem2" : [])
+
+一开始我是选择将uri表示为一个字符串的，那么
+eq .$ sub .$ ("www" : "cw" : "org" : [], [], "#problem2" : []) && eq .$ obj .$ true
+这个就可写成
+eq .$ sub  "http://www.cw.ord/#problem2" && eq .$ obj .$ true
+但是，后来我猜想可能以后的5个问题中，有些问题要去操作一个uri的某个domain或者某个sub_domain,
+所以还是在解释器的内部对于SimpleURI所转化成的Value，采用了能保留更多原来信息的表示法。
+----------------------------------------------------------------------------------------------------------------
+
+---------------------------------------------------- pr3
+
+main = 
+  let foo = readTtlFile "foo.ttl" in
+  let preds = ("www" : "cw" : "org" : [], "problem3" : [], "#predicate1" : []) 
+            : ("www" : "cw" : "org" : [], "problem3" : [], "#predicate2" : [])
+            : ("www" : "cw" : "org" : [], "problem3" : [], "#predicate3" : []) 
+            : []                  in
+  let predicate = proc triple -> 
+        case triple of
+          | (sub, pred, obj) -> elem .$ pred .$ preds
+        end
+  in  printRDF .$ (filter .$ predicate .$ foo)
+
+类似于pr2
+1.读取文件
+2.定义谓词
+3.按定义的谓词来过滤，然后打印
+
+-------------------------------------------------------------pr4
+getSubjs = map .$ proc triple -> 
+  case triple of
+    | (subj, pred, obj) -> subj
+  end
+
+predicate = proc triple -> proc triples ->
+  case triple of
+    | (subj, pred, obj)   -> elem .$ obj .$ (getSubjs .$ triples)
+  end
+
+main = 
+  let foo = readTtlFile "foo.ttl" in
+  let bar = readTtlFile "bar.ttl" in
+  let foo1 = filter .$ (proc triple -> predicate .$ triple .$ bar) .$ foo in
+  let bar1 = filter .$ (proc triple -> predicate .$ triple .$ foo) .$ bar in
+    printRDF .$ (append .$ foo1 .$ bar1)
+
+这个的谓词比前2个prX.stql要复杂一些
+
+----------------------------------------------------------------- pr5
+pred = ("www" : "cw" : "org" : [] , "problem5" : [], "#inRange" : [])
+
+-----------------------------------------------------------------------------------------------------
+辅助函数go的语义
+
+对于每个triple,
+如果它的obj， 也就是n,介于 0~ 99 之外
+  那么转化成(sub, pred, false)
+  否则转化成2个tiple
+   (sub, pre, n + 1) : (sub, pred, true) : ..........
+     
+go = proc triples -> 
+  case triples of
+    | []                              -> []
+    | (sub, pre, n) : triples1        -> if n < 0 || 99 < n
+        then (sub, pred, false) : go .$ triples1
+        else (sub, pre, n + 1) : (sub, pred, true) : go .$ triples1
+  end
+
+main = let foo = readTtlFile "fooProb5.ttl" in 
+            printRDF .$ (go .$ foo)
