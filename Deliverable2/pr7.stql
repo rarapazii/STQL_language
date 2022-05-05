@@ -1,0 +1,15 @@
+subj = ("www" : "cw" : "org" : [], "problem7" : [], "#subject" : [])
+
+pred = ("www" : "cw" : "org" : [], "problem7" : [], "#predicate" : [])
+
+predicate = proc triple ->
+  case triple of
+    | (uri1, uri2, obj) -> (eq .$ uri1 .$ subj) ||
+                           (eq .$ uri2 .$ pred) || 
+                           (eq .$ obj .$ 0) ||
+                           (eq .$ obj .$ (0 - 1))
+  end
+
+main = 
+  let foo = readTtlFile "foo.ttl" in
+  printRDF .$ (filter .$ predicate .$ foo)

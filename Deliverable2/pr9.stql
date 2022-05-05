@@ -1,0 +1,25 @@
+isTriple = proc expr -> case expr of
+   | (a, b, c)            -> true
+   | other                -> false
+  end
+
+getPred = proc triple -> 
+  case triple of
+    | (a, b, c)   -> b
+  end
+
+getObj = proc triple ->
+  case triple of
+    | (a, b, c) -> c
+  end
+
+main = 
+  let foo = readTtlFile "foo.ttl" in
+  let bar = readTtlFile "bar.ttl" in
+  let baz = readTtlFile "baz.ttl" in
+  let preds = map .$ getPred .$ bar in
+  let objs = map .$ getObj .$ baz in
+  printRDF .$ (filter .$ (proc triple ->
+    case triple of
+      | (a, pred, obj)  -> (elem .$ pred .$ preds) && (elem .$ obj .$ objs) && (isTriple .$ obj)
+    end) .$ foo)

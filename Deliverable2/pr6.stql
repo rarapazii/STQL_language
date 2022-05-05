@@ -1,0 +1,7 @@
+notElem = proc x -> proc xs -> not (elem .$ x .$ xs)
+
+main = 
+  let foo = readTtlFile "foo.ttl" in
+  let bar = readTtlFile "bar.ttl" in
+  let baz = readTtlFile "baz.ttl" in
+  printRDF .$ (filter .$ (proc item -> notElem .$ item .$ bar) .$ (append .$ foo .$ baz))

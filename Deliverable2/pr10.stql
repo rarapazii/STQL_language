@@ -1,0 +1,42 @@
+typeError = 1 + "1"
+
+typeCheck = proc expr -> not (eq .$ expr .$ typeError)
+
+isInt = proc expr -> typeCheck .$ (expr + 1)
+
+isBool = proc expr -> typeCheck .$ (not expr)
+
+isTriple = proc expr -> case expr of
+   | (a, b, c)            -> true
+   | other                -> false
+  end
+
+subj = ("www" : "cw" : "org" : [], "problem10" : [], "#maxValue" : [])
+
+pred = ("www" : "cw" : "org" : [], "problem10" : [], "#isValue" : [])
+
+getMaxValue = proc triples ->
+  let temp = filter .$ (proc triple ->
+    case triple of
+      | (sub, pre, x) -> (eq .$ sub .$ subj) && (eq .$ pre .$ pred)
+    end) .$ triples in
+  case temp of
+    | (sub, pre, int) : []        -> int 
+  end 
+
+min = proc x -> proc y -> if x < y then x else y
+
+convert = proc maxValue -> proc triple ->
+  case triple of
+    | (s, p, o) -> 
+           if isBool .$ o
+           then (s, p, not o)
+           else if isInt .$ o
+           then (s, p, min .$ o .$ maxValue)
+           else (s, p, o)
+  end
+
+main = 
+  let foo = readTtlFile "foo.ttl" in
+  let maxValue = getMaxValue .$ foo in
+  printRDF .$ (map .$ (convert .$ maxValue) .$ foo)

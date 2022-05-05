@@ -1,0 +1,16 @@
+getPred = proc triple -> 
+        case triple of
+          | (a, b, c)   -> b
+        end
+
+main = 
+  let foo = readTtlFile "foo.ttl" in
+  let bar = readTtlFile "bar.ttl" in
+  let baz = readTtlFile "baz.ttl" in
+  let preds1 = map .$ getPred .$ foo in
+  let preds2 = map .$ getPred .$ bar in
+  let preds3 = map .$ getPred .$ baz in
+  printRDF .$ (filter .$ (proc triple -> 
+    case triple of
+      | (a, pred, c) -> (elem .$ pred .$ preds1) && (elem .$ pred .$ preds2) && (elem .$ pred .$ preds3)
+    end) .$ (append .$ foo .$ (append .$ bar .$ baz)))
