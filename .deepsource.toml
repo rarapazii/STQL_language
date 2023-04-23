@@ -1,4 +1,7 @@
 version = 1
 
 [[analyzers]]
-name = "test-coverage"
+name = "java"
+
+  [analyzers.meta]
+  runtime_version = "11"
